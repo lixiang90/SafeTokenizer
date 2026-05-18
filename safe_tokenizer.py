@@ -6,6 +6,7 @@ class SafeTokenizer:
     def __init__(self, tokenizer: AutoTokenizer):
         self.tokenizer = tokenizer
         self._build_special_tokens_set()
+        self._check_split_special_tokens_support()
 
     def _build_special_tokens_set(self):
         self.special_tokens = set()
@@ -32,6 +33,70 @@ class SafeTokenizer:
                     self.special_token_to_id[t] = token_id
                     self.special_id_to_token[token_id] = t
 
+    def _check_split_special_tokens_support(self):
+        """检测底层 tokenizer 是否支持 split_special_tokens 参数。"""
+        try:
+            self.tokenizer.encode("", add_special_tokens=False, split_special_tokens=True)
+            self._split_special_tokens = True
+        except TypeError:
+            self._split_special_tokens = False
+
+    def _find_special_token_ranges(self, content: str) -> List[tuple]:
+        """找出文本中所有多字符特殊 token 的出现区间，返回已排序且合并后的区间列表。"""
+        intervals = []
+        for token in self.special_tokens:
+            if len(token) <= 1:
+                continue
+            start = 0
+            while True:
+                idx = content.find(token, start)
+                if idx == -1:
+                    break
+                intervals.append((idx, idx + len(token)))
+                start = idx + 1
+        if not intervals:
+            return []
+        intervals.sort()
+        merged = [intervals[0]]
+        for start, end in intervals[1:]:
+            if start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def _encode_text_safely(self, content: str) -> List[int]:
+        """安全地编码普通文本，确保文本中的特殊 token 字符串不会被解析为特殊 token ID。
+
+        如果底层 tokenizer 支持 split_special_tokens，则优先使用该参数来拆分 added tokens。
+        否则，仅对文本中实际包含的特殊 token 区间逐字符编码，其余部分仍使用正常编码。
+        """
+        if self._split_special_tokens:
+            return self.tokenizer.encode(
+                content, add_special_tokens=False, split_special_tokens=True
+            )
+
+        # Fallback：定位文本中的特殊 token 区间，仅对这些区间逐字符编码
+        ranges = self._find_special_token_ranges(content)
+        if not ranges:
+            return self.tokenizer.encode(content, add_special_tokens=False)
+
+        token_ids = []
+        prev_end = 0
+        for start, end in ranges:
+            if start > prev_end:
+                token_ids.extend(
+                    self.tokenizer.encode(content[prev_end:start], add_special_tokens=False)
+                )
+            for char in content[start:end]:
+                token_ids.extend(self.tokenizer.encode(char, add_special_tokens=False))
+            prev_end = end
+        if prev_end < len(content):
+            token_ids.extend(
+                self.tokenizer.encode(content[prev_end:], add_special_tokens=False)
+            )
+        return token_ids
+
     def encode(self, data: List[Dict[str, Union[str, int]]]) -> List[int]:
         all_token_ids = []
 
@@ -44,7 +109,7 @@ class SafeTokenizer:
                     raise ValueError(
                         f"For 'text' type, content must be a string, got {type(content)}"
                     )
-                token_ids = self.tokenizer.encode(content, add_special_tokens=False)
+                token_ids = self._encode_text_safely(content)
                 all_token_ids.extend(token_ids)
 
             elif item_type == "special":

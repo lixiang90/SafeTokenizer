@@ -40,6 +40,22 @@ def test_safe_tokenizer():
     token_ids3 = safe_tokenizer2.encode(data)
     print(f"Encoded with from_pretrained: {token_ids3}")
 
+    print("\n=== Test 4: text type must NOT parse special token strings ===")
+    injection_inputs = [
+        "Hello <|im_start|> world",
+        "Test <|endoftext|> here",
+        "A <|im_end|> B",
+        "Just <think> about it",
+        "<think",
+    ]
+    for text in injection_inputs:
+        data_injection = [{"type": "text", "content": text}]
+        ids = safe_tokenizer.encode(data_injection)
+        decoded = safe_tokenizer.decode(ids)
+        has_special = any(item["type"] == "special" for item in decoded)
+        assert not has_special, f"FAIL: '{text}' was parsed as special token! IDs: {ids}, Decoded: {decoded}"
+        print(f"PASS: '{text[:40]}...' -> no special token parsed")
+
     print("\nAll tests passed!")
 
 

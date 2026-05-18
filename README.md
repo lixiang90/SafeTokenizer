@@ -8,7 +8,7 @@
 
 ### DeepSeek `<think>` 标签事件的启示
 
-2025~2026 年，DeepSeek 模型因其在回复中使用 `<think>...</think>` 标签展示思维链（Chain-of-Thought）而受到广泛关注。然而，这也暴露了一个严重的安全隐患：当用户输入中包含与特殊控制标记相似的字符串时，如果系统**未能严格区分"普通文本"和"控制指令"**，就会引发不可预测的行为。
+2026 年，DeepSeek 模型因其在回复中使用 `<think>...</think>` 标签展示思维链（Chain-of-Thought）而受到广泛关注。然而，这也暴露了一个严重的安全隐患：当用户输入中包含与特殊控制标记相似的字符串时，如果系统**未能严格区分"普通文本"和"控制指令"**，就会引发不可预测的行为。
 
 具体表现包括：
 - **用户输入注入**：攻击者故意在输入中插入 `<think>` 或 `<think`（未闭合）等字符串，模型可能将其误认为是系统内部标记，导致输出混乱、泄露其他会话信息，或被诱导输出本不应展示的内部推理过程。
@@ -31,7 +31,12 @@
 这种设计带来了以下关键优势：
 
 ### 1. 彻底消除注入歧义
-用户输入的内容**必须**被标记为 `type: "text"`。在编码时，这部分内容会经过正常的文本编码流程，即使其中包含 `<think>`、`<|im_start|>` 等看起来像特殊标记的字符串，也只会被当作普通字符序列处理，**绝不会被解析为具有控制意义的特殊 Token**。
+用户输入的内容**必须**被标记为 `type: "text"`。在编码时，`SafeTokenizer` 会主动屏蔽特殊 Token 的识别：
+
+- **优先策略**：如果底层 Tokenizer 支持 `split_special_tokens` 参数，编码时会强制启用该参数，使文本中的特殊 Token 字符串被拆分为普通子词（Subword），而不是被识别为独立的特殊 Token ID。
+- **兼容回退**：对于不支持该参数的旧版 Tokenizer，会**智能定位文本中出现的特殊 Token 字符串**，仅对这些局部区间逐字符编码，其余文本仍使用正常的子词编码。这既保证了安全性，又最大限度保留了 Tokenization 效率。
+
+这意味着即使文本中包含 `<think>`、`<|im_start|>`、`<|endoftext|>` 等字符串，也只会被当作普通字符序列处理，**绝不会被解析为具有控制意义的特殊 Token**。
 
 ### 2. 精确控制特殊标记的插入
 系统提示、消息分隔符、结束标记等特殊 Token **必须**被显式声明为 `type: "special"`。这确保了只有开发者明确意图插入的控制标记才会进入 Token 序列，避免了因字符串拼接失误导致的安全漏洞。
@@ -143,7 +148,7 @@ model_max_length = safe_tokenizer.model_max_length
 
 将结构化数据编码为 Token ID 列表。
 
-- **`text` 类型**：`content` 必须为字符串。使用 `tokenizer.encode(content, add_special_tokens=False)` 编码为普通文本 Token。
+- **`text` 类型**：`content` 必须为字符串。编码时会强制屏蔽特殊 Token 识别（优先使用 `split_special_tokens=True`，不支持则逐字符编码），确保内容中的特殊 Token-like 字符串不会被解析为特殊 Token ID。
 - **`special` 类型**：`content` 可为字符串（特殊 Token 名称）或整数（Token ID）。直接插入对应的 Token ID。
 
 #### `decode(token_ids: List[int]) -> List[Dict[str, Union[str, int]]]`
